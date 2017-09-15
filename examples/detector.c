@@ -2,10 +2,122 @@
 
 static int coco_ids[] = {1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,31,32,33,34,35,36,37,38,39,40,41,42,43,44,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,67,70,72,73,74,75,76,77,78,79,80,81,82,84,85,86,87,88,89,90};
 
+float get_validation_loss(char *valid_images, network net, int ngpus)
+{
+
+    network copy = net;
+
+    printf("%d %f %f VS %d %f %f\n", *copy.seen, *copy.input, *copy.truth, *net.seen, *net.input, *net.truth);
+    copy.seen = malloc(sizeof(*net.seen));
+    *copy.seen = 0;
+
+    printf("%d %f %f VS %d %f %f\n", *copy.seen, *copy.input, *copy.truth, *net.seen, *net.input, *net.truth);
+    copy.input = malloc(sizeof(*net.input));
+    *copy.input = *net.input;
+
+    printf("%d %f %f VS %d %f %f\n", *copy.seen, *copy.input, *copy.truth, *net.seen, *net.input, *net.truth);    
+    copy.truth = malloc(sizeof(*net.truth));
+    *copy.truth = *net.truth;
+
+    printf("%d %f %f VS %d %f %f\n", *copy.seen, *copy.input, *copy.truth, *net.seen, *net.input, *net.truth);    
+    copy.delta = malloc(sizeof(*net.delta));
+    copy.workspace = malloc(sizeof(*net.seen));
+    printf("%d %f %f VS %d %f %f\n", *copy.seen, *copy.input, *copy.truth, *net.seen, *net.input, *net.truth);    
+    
+    int i;
+    float sum_loss = 0, loss = 0;
+    data valid, buffer;
+    layer l = net.layers[net.n - 1];
+
+    int classes = l.classes;
+    float jitter = l.jitter;
+    int imgs = net.batch * net.subdivisions * ngpus;
+
+    list *plist = get_paths(valid_images);
+    //int N = plist->size;
+    char **paths = (char **)list_to_array(plist);
+
+    load_args args = get_base_args(copy);
+    // args.coords = l.coords;
+    args.paths = paths;
+    args.n = imgs;
+    args.m = plist->size; // total images
+    args.classes = classes;
+    args.jitter = jitter;
+    args.num_boxes = l.max_boxes;
+    args.d = &buffer;
+    args.type = DETECTION_DATA;
+    //args.type = INSTANCE_DATA;
+    args.threads = 8;
+
+    pthread_t load_thread = load_data(args);
+    clock_t time;
+    int count = 0;
+
+    int batch_per_epoch = args.m/(copy.batch*copy.subdivisions);
+
+    printf("VALIDATION No. of images:%d,    Batch size:%d,   No. of batches per epoch: %d\n",
+        args.m, copy.batch*copy.subdivisions, batch_per_epoch);
+
+    printf("%d\n", get_current_batch(copy));
+    while(get_current_batch(copy) < batch_per_epoch){
+        printf("VALIDATION *copy.seen: %d, percentage completed:%.2f\n",*copy.seen, *copy.seen/(float)args.m*100.0); //*copy.seen is the number of images processed
+
+        time=clock();
+        pthread_join(load_thread, 0);
+        valid = buffer;
+        load_thread = load_data(args);
+
+        printf("Loaded: %lf seconds\n", sec(clock()-time));
+
+        time=clock();
+        float loss = 0;
+
+// #ifdef GPU
+//         if(ngpus == 1){
+//             printf("HERE\n");
+//             loss = valid_network(copy, valid);
+//         } else {
+//             printf("NOT SUPPORTING MULITPLE GPU\n");
+//             // loss = train_networks(copys, ngpus, train, 4); 
+//         }
+// #else
+        loss = valid_network(copy, valid);
+// #endif
+        sum_loss += loss;
+
+        printf("%d load_data: %f, %f avg, %f rate, %lf seconds, %d images\n", get_current_batch(copy), loss, sum_loss/get_current_batch(copy), get_current_rate(copy), sec(clock()-time), i*imgs);
+//         if(i%100==0){
+// #ifdef GPU
+//             if(ngpus != 1) sync_nets(nets, ngpus, 0);
+// #endif
+//         }
+//         if(i%10000==0 || (i < 1000 && i%200 == 0)){
+// #ifdef GPU
+//             if(ngpus != 1) sync_nets(nets, ngpus, 0);
+// #endif
+//         }
+        
+    }
+
+// #ifdef GPU
+//     if(ngpus != 1) sync_nets(nets, ngpus, 0);
+// #endif
+    free_data(valid);
+    free(copy.seen);
+    free(copy.input);
+    free(copy.truth);
+    free(copy.delta);
+    free(copy.workspace);
+
+    return sum_loss/batch_per_epoch;
+}
+
 void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, int ngpus, int clear)
 {
     list *options = read_data_cfg(datacfg);
     char *train_images = option_find_str(options, "train", "data/train.list");
+    char *valid_images = option_find_str(options, "valid", "");
     char *backup_directory = option_find_str(options, "backup", "/backup/");
 
     srand(time(0));
@@ -45,7 +157,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     args.coords = l.coords;
     args.paths = paths;
     args.n = imgs;
-    args.m = plist->size;
+    args.m = plist->size; // total images
     args.classes = classes;
     args.jitter = jitter;
     args.num_boxes = l.max_boxes;
@@ -57,8 +169,18 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     pthread_t load_thread = load_data(args);
     clock_t time;
     int count = 0;
-    //while(i*imgs < N*120){
+    int prev_epoch = -1;
+    float val_loss;
+        
+    printf("No. of images:%d,    Batch size:%d,   No. of batches per epoch: %d\n",
+        args.m, net.batch*net.subdivisions, args.m/(net.batch*net.subdivisions));
+
     while(get_current_batch(net) < net.max_batches){
+        net.epoch = (*net.seen) / (float)args.m ;
+        
+        printf("net.train: %d\n:", net.train);
+        printf("net.epoch: %f, *net.seen: %d\n",net.epoch, *net.seen); //*net.seen is the number of images processed
+
         if(l.random && count++%10 == 0){
             printf("Resizing\n");
             int dim = (rand() % 10 + 10) * 32;
@@ -78,6 +200,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
             }
             net = nets[0];
         }
+
         time=clock();
         pthread_join(load_thread, 0);
         train = buffer;
@@ -133,7 +256,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
             sprintf(buff, "%s/%s.backup", backup_directory, base);
             save_weights(net, buff);
         }
-        if(i%10000==0 || (i < 1000 && i%100 == 0)){
+        if(i%10000==0 || (i < 1000 && i%200 == 0)){
 #ifdef GPU
             if(ngpus != 1) sync_nets(nets, ngpus, 0);
 #endif
@@ -142,6 +265,22 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
             save_weights(net, buff);
         }
         free_data(train);
+
+        if (prev_epoch == -1 || prev_epoch != (int)floor(net.epoch)) {
+            printf("=============================VALIDATION TIME at epoch %d=======================\n", (int)floor(net.epoch));
+
+            prev_epoch = (int)floor(net.epoch);
+            if (strcmp(valid_images, "") != 0) {
+                pthread_join(load_thread, 0);
+                train = buffer;
+                free_data(train);
+                val_loss = get_validation_loss(valid_images, net, ngpus);
+                printf("VALIDATION loss: %f\n", val_loss);
+                load_thread = load_data(args);
+
+            }
+
+        }
     }
 #ifdef GPU
     if(ngpus != 1) sync_nets(nets, ngpus, 0);

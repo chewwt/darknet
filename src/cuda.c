@@ -153,7 +153,9 @@ void cuda_free(float *x_gpu)
 void cuda_push_array(float *x_gpu, float *x, size_t n)
 {
     size_t size = sizeof(float)*n;
+    printf("%d\n", size);
     cudaError_t status = cudaMemcpy(x_gpu, x, size, cudaMemcpyHostToDevice);
+    printf("Here?\n");
     check_error(status);
 }
 

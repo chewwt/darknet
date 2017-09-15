@@ -282,7 +282,9 @@ void backward_network(network net)
 float train_network_datum(network net)
 {
 #ifdef GPU
-    if(gpu_index >= 0) return train_network_datum_gpu(net);
+    if(gpu_index >= 0) {
+        return train_network_datum_gpu(net);
+    }
 #endif
     *net.seen += net.batch;
     net.train = 1;
@@ -290,6 +292,20 @@ float train_network_datum(network net)
     backward_network(net);
     float error = *net.cost;
     if(((*net.seen)/net.batch)%net.subdivisions == 0) update_network(net);
+    return error;
+}
+
+float valid_network_datum(network net)
+{
+    #ifdef GPU
+    if(gpu_index >= 0) {
+        return valid_network_datum_gpu(net);
+    }
+#endif
+    *net.seen += net.batch;
+    forward_network(net);
+    backward_network(net);
+    float error = *net.cost;
     return error;
 }
 
@@ -318,6 +334,24 @@ float train_network(network net, data d)
     for(i = 0; i < n; ++i){
         get_next_batch(d, batch, i*batch, net.input, net.truth);
         float err = train_network_datum(net);
+        sum += err;
+    }
+    return (float)sum/(n*batch);
+}
+
+float valid_network(network net, data d)
+{
+
+    // printf("d.X.rows: %d, net.batch: %d  --- %d\n", d.X.rows, net.batch, d.X.rows % net.batch == 0);
+    // assert(d.X.rows % net.batch == 0);
+
+    int batch = net.batch;
+    int n = d.X.rows / batch;
+    int i;
+    float sum = 0;
+    for(i = 0; i < n; ++i){
+        get_next_batch(d, batch, i*batch, net.input, net.truth);
+        float err = valid_network_datum(net);
         sum += err;
     }
     return (float)sum/(n*batch);

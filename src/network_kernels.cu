@@ -132,6 +132,27 @@ float train_network_datum_gpu(network net)
     return error;
 }
 
+float valid_network_datum_gpu(network net)
+{
+
+    printf("valid_network_datum_gpu\n");
+    *net.seen += net.batch;
+
+
+    printf("valid_network_datum_gpu 2 2\n");
+    int x_size = net.inputs*net.batch;
+    int y_size = net.truths*net.batch;
+    cuda_push_array(net.input_gpu, net.input, x_size);
+    cuda_push_array(net.truth_gpu, net.truth, y_size);
+    printf("valid_network_datum_gpu 4s\n");
+
+    forward_network_gpu(net);
+    backward_network_gpu(net);
+
+    float error = *net.cost;
+    return error;
+}
+
 typedef struct {
     network net;
     data d;

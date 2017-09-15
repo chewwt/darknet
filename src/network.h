@@ -11,6 +11,7 @@
 
 #ifdef GPU
 float train_network_datum_gpu(network net);
+float valid_network_datum_gpu(network net);
 float *network_predict_gpu(network net, float *input);
 void pull_network_output(network net);
 #endif

@@ -622,6 +622,7 @@ void scale_matrix(matrix m, float scale);
 matrix csv_to_matrix(char *filename);
 float *network_accuracies(network net, data d, int n);
 float train_network_datum(network net);
+float valid_network_datum(network net);
 image make_random_image(int w, int h, int c);
 
 void denormalize_connected_layer(layer l);
@@ -719,6 +720,7 @@ image get_image_from_stream(CvCapture *cap);
 #endif
 void free_image(image m);
 float train_network(network net, data d);
+float valid_network(network net, data d);
 pthread_t load_data_in_thread(load_args args);
 void load_data_blocking(load_args args);
 list *get_paths(char *filename);
